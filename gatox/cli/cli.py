@@ -204,7 +204,7 @@ def attack(args, parser):
                 keep_alive=args.keep_alive,
             )
         elif args.runner_on_runner:
-            gh_attack_runner.runner_on_runner(
+            gh_attack_runner.push_runner_on_runner(
                 args.target,
                 args.branch,
                 args.pr_title,

